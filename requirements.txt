@@ -1,0 +1,7 @@
+psutil
+pefile
+pyopenssl
+certifi
+tqdm
+ipaddress
+requests
