@@ -8,5 +8,5 @@ A quick way to discover suspicious connections to a Windows machine
 - Filters out Microsoft, Akamai, and Cloudflare connections
 
 # How to use?
-1.) Install requirements.txt
-2.) Run the python script from cmd
+- Install requirements.txt
+- Run the python script from cmd
