@@ -6,25 +6,43 @@ import certifi
 from tqdm import tqdm
 import ipaddress
 import requests
+import math
 
-def is_signed(file_path):
+def issigned(filepath):
     try:
-        pe = pefile.PE(file_path)
+        pe = pefile.PE(filepath)
         if hasattr(pe, 'DIRECTORY_ENTRY_SECURITY'):
-            for security_entry in pe.DIRECTORY_ENTRY_SECURITY:
-                security_data = security_entry.struct
-                certificate = crypto.load_certificate(crypto.FILETYPE_ASN1, pe.write()[security_data.VirtualAddress + 8: security_data.VirtualAddress + security_data.Size])
+            for sec in pe.DIRECTORY_ENTRY_SECURITY:
+                secdata = sec.struct
+                cert = crypto.load_certificate(crypto.FILETYPE_ASN1, pe.write()[secdata.VirtualAddress + 8: secdata.VirtualAddress + secdata.Size])
                 store = crypto.X509Store()
                 store.set_default_paths()
                 store.load_locations(certifi.where())
-                store_context = crypto.X509StoreContext(store, certificate)
-                store_context.verify_certificate()
+                storectx = crypto.X509StoreContext(store, cert)
+                storectx.verify_certificate()
                 return True
     except:
         return False
     return False
 
-def get_parent_process(pid):
+def calculate_entropy(filepath):
+    with open(filepath, 'rb') as f:
+        byte_arr = list(f.read())
+    file_size = len(byte_arr)
+    freq_list = []
+    
+    for b in range(256):
+        ctr = byte_arr.count(b)
+        freq_list.append(float(ctr) / file_size)
+    
+    entropy = 0.0
+    for freq in freq_list:
+        if freq > 0:
+            entropy = entropy + freq * math.log2(freq)
+    entropy = -entropy
+    return entropy
+
+def getparentproc(pid):
     try:
         parent = psutil.Process(pid).parent()
         if parent:
@@ -33,54 +51,55 @@ def get_parent_process(pid):
         return None
     return None
 
-def is_external_ip(ip):
+def isexternalip(ip):
     try:
         ip = ipaddress.ip_address(ip)
         return not (ip.is_private or ip.is_loopback)
     except ValueError:
         return False
 
-def get_geolocation(ip):
+def getgeo(ip):
     try:
-        response = requests.get(f"https://ipinfo.io/{ip}/json")
-        if response.status_code == 200:
-            return response.json()
+        resp = requests.get(f"https://ipinfo.io/{ip}/json")
+        if resp.status_code == 200:
+            return resp.json()
     except requests.RequestException:
         return None
     return None
 
-def find_suspicious_connections():
-    connections = psutil.net_connections(kind='inet')
-    suspicious_connections = []
+def findsuspconns():
+    conns = psutil.net_connections(kind='inet')
+    suspconns = []
 
-    for conn in tqdm(connections, desc="Scanning connections", unit="connection"):
+    for conn in tqdm(conns, desc="Checking connections..", unit="connection"):
         if conn.status == 'ESTABLISHED' and conn.raddr:
-            remote_ip = conn.raddr.ip
-            if is_external_ip(remote_ip):
+            raddr = conn.raddr.ip
+            if isexternalip(raddr):
                 try:
-                    process = psutil.Process(conn.pid)
-                    parent_process = get_parent_process(conn.pid)
-                    if parent_process and parent_process.exe():
-                        if not is_signed(parent_process.exe()):
-                            geolocation = get_geolocation(remote_ip)
-                            if geolocation and "org" in geolocation and "Microsoft" not in geolocation["org"]:
-                                suspicious_connections.append((conn, parent_process, geolocation))
+                    proc = psutil.Process(conn.pid)
+                    parentproc = getparentproc(conn.pid)
+                    if parentproc and parentproc.exe():
+                        signed = issigned(parentproc.exe())
+                        entropy = calculate_entropy(parentproc.exe())
+                        if not signed or entropy > 7.0:
+                            geo = getgeo(raddr)
+                            if geo and "org" in geo and not any(x in geo["org"] for x in ["Microsoft", "Akamai", "Cloudflare"]):
+                                suspconns.append((conn, parentproc, geo))
                 except (psutil.NoSuchProcess, psutil.AccessDenied, AttributeError):
                     continue
 
-    return suspicious_connections
+    return suspconns
 
 def main():
-    suspicious_connections = find_suspicious_connections()
-    if not suspicious_connections:
-        print("Nothing suspicious detected.")
+    suspconns = findsuspconns()
+    if not suspconns:
+        print("Nothing suspicious found.")
     else:
-        for conn, parent, geo in suspicious_connections:
-            remote_ip = conn.raddr.ip
-            location = geo.get("city", "Unknown") + ", " + geo.get("region", "Unknown") + ", " + geo.get("country", "Unknown")
+        for conn, parent, geo in suspconns:
+            raddr = conn.raddr.ip
+            loc = geo.get("city", "Unknown") + ", " + geo.get("region", "Unknown") + ", " + geo.get("country", "Unknown")
             org = geo.get("org", "Unknown")
-            if "Microsoft" not in org:
-                print(f"Suspicious: {parent.name()} - {parent.pid} - Connected to: {remote_ip} - Location: {location} - ISP: {org}")
+            print(f"Suspicious: {parent.name()} - {parent.pid} - Connected to: {raddr} - Location: {loc} - ISP: {org} - State/Country: {geo.get('region', 'Unknown')}/{geo.get('country', 'Unknown')}")
 
 if __name__ == "__main__":
     main()
