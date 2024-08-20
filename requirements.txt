@@ -1,7 +1,5 @@
 psutil
-pefile
-pyopenssl
-certifi
-tqdm
 ipaddress
-requests
+pefile
+rich
+signify
